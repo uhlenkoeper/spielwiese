@@ -12,7 +12,7 @@
 <body>
   <header class="header wrap">
     <a class="brand" href="#" aria-label="Uhlenköper-Camp Startseite"><span class="brand-icon" aria-hidden="true">u<span>• •</span></span><span>uhlenköper<span class="brand-sub">CAMP · UELZEN</span></span></a>
-    <nav aria-label="Hauptnavigation"><a href="#ideen">Die Möglichkeiten</a><a href="#so-gehts">So geht’s</a><a class="nav-button" href="#ausprobieren">Idee finden <span aria-hidden="true">↗</span></a></nav>
+    <nav aria-label="Hauptnavigation"><a href="#ideen">Die Möglichkeiten</a><a href="#so-gehts">So geht’s</a><a class="nav-button" href="#zaehlerstaende">Zählerstände <span aria-hidden="true">↗</span></a></nav>
   </header>
   <main>
     <section class="hero wrap">
@@ -45,6 +45,38 @@
         <article class="card"><span class="card-icon" aria-hidden="true">✳</span><span class="card-number">03 / ZUSAMMENKOMMEN</span><h3>Heute auf dem Platz</h3><p>Ein kleines schwarzes Brett für gemeinsame Aktionen, Neuigkeiten und schöne Begegnungen. So bleibt auf dem Platz etwas in Bewegung.</p><button data-idea="Gestalte ein digitales schwarzes Brett für das Camp mit Beispielkarten für gemeinsame Aktionen. Kennzeichne alle Termine ausdrücklich als Demo.">Diese Idee mitnehmen <span aria-hidden="true">↗</span></button></article>
       </div>
       <p class="section-note"><span aria-hidden="true">↳</span> Das sind Ideen für den nächsten Schritt. Noch keine fertigen Angebote des Camps.</p>
+    </section>
+    <section id="zaehlerstaende" class="section wrap meter-section" aria-labelledby="meter-heading">
+      <div class="section-head"><div><p class="eyebrow">EIN HELFER FÜR DEN PLATZALLTAG</p><h2 id="meter-heading">Zählerstand festhalten.</h2></div><p>Ablesen, fotografieren, speichern.<br>Alles an einem Platz.</p></div>
+      <p class="meter-storage-note">Deine Einträge und Fotos bleiben nur in diesem Browser auf diesem Gerät. Sie werden nicht ans Camp übertragen oder zwischen Geräten synchronisiert. Beim Löschen der Browserdaten können sie verloren gehen. Sichere wichtige Werte als CSV und lade die Fotos einzeln herunter.</p>
+      <noscript><p>Bitte aktiviere JavaScript, um Zählerstände mit Fotos zu erfassen.</p></noscript>
+      <div class="meter-grid">
+        <form id="meter-form" class="meter-panel">
+          <h3>Neue Ablesung</h3>
+          <fieldset id="meter-fields" disabled>
+            <div class="meter-fields">
+              <label>Zählerart<select id="meter-type" name="type"><option value="strom">Strom · kWh</option><option value="wasser">Wasser · m³</option><option value="gas">Gas · m³</option></select></label>
+              <label>Zählernummer / Standort<input id="meter-name" name="meter" required maxlength="80" placeholder="z. B. Stellplatz 12 / Z-104"></label>
+              <label>Ablesedatum<input id="meter-date" name="date" type="date" required></label>
+              <label>Zählerstand <span id="meter-unit">(kWh)</span><input id="meter-value" name="value" inputmode="decimal" required maxlength="20" placeholder="z. B. 1234,56" aria-describedby="meter-value-hint"></label>
+            </div>
+            <p id="meter-value-hint" class="meter-hint">Dezimalstellen mit Komma oder Punkt, ohne Tausendertrennzeichen.</p>
+            <label for="meter-photo">Foto des Zählers <span class="meter-hint">(Pflichtfeld)</span></label>
+            <input id="meter-photo" name="photo" type="file" accept="image/*" capture="environment" required aria-describedby="meter-photo-hint">
+            <p id="meter-photo-hint" class="meter-hint">Am Handy ein Foto aufnehmen oder eine Bilddatei auswählen (max. 15 MB). Fotos werden zum Speichern verkleinert.</p>
+            <img id="meter-preview" class="meter-preview" alt="Vorschau des ausgewählten Zählerfotos" hidden>
+            <label for="meter-note">Notiz <span class="meter-hint">(optional)</span></label>
+            <textarea id="meter-note" name="note" rows="2" maxlength="500" placeholder="z. B. Ablesung bei Abreise"></textarea>
+            <button class="button" type="submit">Ablesung speichern <span aria-hidden="true">+</span></button>
+          </fieldset>
+          <p id="meter-status" class="meter-status" role="status" aria-live="polite">Lokalen Speicher öffnen …</p>
+        </form>
+        <div class="meter-panel" aria-labelledby="meter-history-heading">
+          <div class="meter-history-head"><h3 id="meter-history-heading">Deine Ablesungen</h3><button id="meter-export" type="button" class="meter-text-button" disabled>CSV herunterladen ↓</button></div>
+          <p id="meter-empty" class="meter-empty">Noch keine Ablesung vorhanden. Halte deinen ersten Zählerstand mit einem Foto fest.</p>
+          <ul id="meter-list" class="meter-list"></ul>
+        </div>
+      </div>
     </section>
     <section id="so-gehts" class="how-section"><div class="wrap how-grid"><div><p class="eyebrow">VIBE CODING, GANZ UNKOMPLIZIERT</p><h2>Du hast die Idee.<br>Der Chat hilft beim Bauen.</h2><p>Du musst keine Programmiersprache lernen, um loszulegen. Beschreibe hier im Entwicklungs-Chat, was du dir wünschst – wir machen Schritt für Schritt eine Seite daraus.</p><a class="text-link" href="#ausprobieren">Deinen ersten Wunsch finden <span aria-hidden="true">↓</span></a></div><ol class="steps"><li><span>1</span><div><h3>In deinen Worten beschreiben</h3><p>„Mach die Seite sommerlicher“ oder „Ich möchte eine Packliste für unsere Gäste“ reicht als Anfang.</p></div></li><li><span>2</span><div><h3>Anschauen und weiterdenken</h3><p>Der Code wird im Repository angepasst. Du gibst Feedback, bis Inhalt und Gestaltung für dich passen.</p></div></li><li><span>3</span><div><h3>Veröffentlichen und wachsen lassen</h3><p>Nach dem Übertragen auf den Hauptbranch veröffentlicht GitHub Pages die neue Version automatisch.</p></div></li></ol></div></section>
     <section id="ausprobieren" class="section wrap try-section"><p class="eyebrow">DER ERSTE SCHRITT IST EIN SATZ</p><h2>Was möchtest du ausprobieren?</h2><p>Wähle eine Anregung aus. Kopiere den Wunsch und füge ihn hier im Entwicklungs-Chat ein.</p><div class="idea-chips" aria-label="Beispielwünsche"><button data-idea="Ergänze eine interaktive Packliste für einen nachhaltigen Campingurlaub, die Gäste im Browser abhaken können.">Eine Packliste zum Abhaken <span aria-hidden="true">+</span></button><button data-idea="Ergänze eine Bildergalerie für das Uhlenköper-Camp. Nutze zunächst klar erkennbare Platzhalter für eigene Fotos.">Platz für unsere Lieblingsbilder <span aria-hidden="true">+</span></button><button data-idea="Ergänze eine englische Version dieser Seite und einen gut sichtbaren Sprachschalter.">Die Seite auch auf Englisch <span aria-hidden="true">+</span></button></div><div class="prompt-box"><label for="idea">DEIN WUNSCH FÜR DEN CHAT</label><textarea id="idea" rows="3">Ergänze eine interaktive Packliste für einen nachhaltigen Campingurlaub, die Gäste im Browser abhaken können.</textarea><div class="prompt-footer"><span id="copy-status" role="status" aria-live="polite">Du kannst diesen Text auch selbst verändern.</span><button id="copy" class="button">Wunsch kopieren <span aria-hidden="true">⧉</span></button></div></div></section>

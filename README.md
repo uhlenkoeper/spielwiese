@@ -16,6 +16,14 @@ Die Seite ist dann lokal auf Port 8000 verfügbar. Zum Beenden Strg+C drücken.
 
 Zum Beispiel: „Ergänze eine Packliste zum Abhaken“ oder „Mach die Seite sommerlicher“. Der Entwicklungs-Chat bearbeitet die Dateien dieses Repositorys. Die Webseite selbst enthält keinen KI-Chat und benötigt keinen API-Schlüssel. Ihre Beispielwünsche lassen sich auswählen, bearbeiten und für den Entwicklungs-Chat kopieren.
 
+## Zählerstände mit Fotos
+
+Über **Zählerstände** in der Navigation lassen sich Strom-, Wasser- und Gaszähler erfassen: Zählernummer oder Standort, Ablesedatum, manuell abgelesener Wert, ein Pflichtfoto und eine optionale Notiz. Komma und Punkt sind als Dezimaltrennzeichen erlaubt; Tausendertrennzeichen nicht. Am Smartphone bietet das Fotofeld je nach Browser die Kamera an; alternativ kann eine Bilddatei ausgewählt werden. Die Vorschau hilft beim Prüfen des Fotos. Es gibt keine automatische Texterkennung.
+
+Fotos bis 15 MB werden im Browser auf maximal 1600 Pixel Kantenlänge verkleinert und als JPEG gespeichert. Die Ablesungen einschließlich Fotos bleiben in der lokalen IndexedDB des Browsers und sind nach erneutem Laden verfügbar. Sie werden weder auf GitHub noch auf einem Server gespeichert. Es gibt keine Übertragung ans Camp, gemeinsame Datenbank oder Synchronisierung zwischen Geräten. Anderer Browser, privater Modus, eine andere Seitenadresse oder gelöschte Browserdaten können bedeuten, dass die Einträge nicht mehr verfügbar sind.
+
+Der Verlauf zeigt die neuesten Ablesedaten zuerst. Einträge lassen sich nach Bestätigung inklusive Foto löschen. **CSV herunterladen** sichert die Werte und Notizen für Tabellenprogramme; Fotos sind nicht in der CSV enthalten und können pro Ablesung separat heruntergeladen werden. Der Export ist keine in der Anwendung wiederherstellbare Sicherung. Bei Speicherfehlern bleiben Formulareingaben erhalten. Ohne verfügbaren lokalen Speicher bleibt die Erfassung gesperrt und zeigt einen Hinweis.
+
 ## Auf GitHub Pages veröffentlichen
 
 1. Dateien auf den Branch `main` des Repositorys übertragen.
