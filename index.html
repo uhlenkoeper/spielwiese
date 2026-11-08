@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#234e42">
+  <!-- Empty uses this server. For a separate backend, set its HTTPS origin here. -->
+  <meta name="meter-api" content="">
   <meta name="description" content="Die digitale Spielwiese für das Uhlenköper-Camp in Uelzen. Kleine Ideen, die Camping schöner machen – gemeinsam im Chat entwickelt.">
   <title>Uhlenköper-Camp · Platz für neue Ideen</title>
   <link rel="stylesheet" href="styles.css">
@@ -48,7 +50,7 @@
     </section>
     <section id="zaehlerstaende" class="section wrap meter-section" aria-labelledby="meter-heading">
       <div class="section-head"><div><p class="eyebrow">EIN HELFER FÜR DEN PLATZALLTAG</p><h2 id="meter-heading">Zählerstand festhalten.</h2></div><p>Ablesen, fotografieren, speichern.<br>Alles an einem Platz.</p></div>
-      <p class="meter-storage-note">Deine Einträge und Fotos bleiben nur in diesem Browser auf diesem Gerät. Sie werden nicht ans Camp übertragen oder zwischen Geräten synchronisiert. Beim Löschen der Browserdaten können sie verloren gehen. Sichere wichtige Werte als CSV und lade die Fotos einzeln herunter.</p>
+      <p class="meter-storage-note">Erfasse zuerst alle Zählerstände mit Fotos. Die Entwürfe bleiben bis zum Abschluss in diesem Browser. Mit „Alle Ablesungen abschließen und senden“ werden sie zentral gespeichert und gemeinsam per E-Mail an info@uhlenkoeper-camp.de übermittelt. Der Abschluss ist verfügbar, sobald der Server und der E-Mail-Versand eingerichtet sind.</p>
       <noscript><p>Bitte aktiviere JavaScript, um Zählerstände mit Fotos zu erfassen.</p></noscript>
       <div class="meter-grid">
         <form id="meter-form" class="meter-panel">
@@ -75,6 +77,17 @@
           <div class="meter-history-head"><h3 id="meter-history-heading">Deine Ablesungen</h3><button id="meter-export" type="button" class="meter-text-button" disabled>CSV herunterladen ↓</button></div>
           <p id="meter-empty" class="meter-empty">Noch keine Ablesung vorhanden. Halte deinen ersten Zählerstand mit einem Foto fest.</p>
           <ul id="meter-list" class="meter-list"></ul>
+          <div class="meter-completion">
+            <h4>Erfassung abschließen</h4>
+            <p id="meter-pending-count" class="meter-hint">Keine offenen Ablesungen.</p>
+            <label for="meter-access-code">Zugangscode für das Camp</label>
+            <input id="meter-access-code" type="password" autocomplete="current-password" placeholder="Zugangscode eingeben">
+            <p class="meter-hint">Nach dem Abschluss geht eine gemeinsame E-Mail mit Übersicht und Fotos an <strong>info@uhlenkoeper-camp.de</strong>. Bis zu 50 Ablesungen und insgesamt 8 MB verkleinerte Fotos pro Erfassung.</p>
+            <button id="meter-finish" class="button" type="button" disabled>Alle Ablesungen abschließen und senden</button>
+            <p id="meter-delivery-status" class="meter-status" role="status" aria-live="polite">Speicher- und Versanddienst prüfen …</p>
+            <button id="meter-archive-load" class="meter-text-button" type="button" disabled>Zentral gespeicherte Erfassungen laden ↓</button>
+            <div id="meter-archive" class="meter-archive"></div>
+          </div>
         </div>
       </div>
     </section>

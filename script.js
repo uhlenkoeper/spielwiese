@@ -25,7 +25,7 @@ document.querySelector('#copy').addEventListener('click', async () => {
   }
 });
 
-// Photos and readings stay in this browser's IndexedDB, never in the repository.
+// Local drafts are uploaded as one immutable collection only on explicit completion.
 (() => {
   const form = document.querySelector('#meter-form');
   const fields = document.querySelector('#meter-fields');
@@ -39,6 +39,12 @@ document.querySelector('#copy').addEventListener('click', async () => {
   const note = document.querySelector('#meter-note');
   const list = document.querySelector('#meter-list');
   const exportButton = document.querySelector('#meter-export');
+  const finishButton = document.querySelector('#meter-finish');
+  const deliveryStatus = document.querySelector('#meter-delivery-status');
+  const accessCode = document.querySelector('#meter-access-code');
+  const archiveButton = document.querySelector('#meter-archive-load');
+  const archive = document.querySelector('#meter-archive');
+  const apiBase = document.querySelector('meta[name="meter-api"]').content.replace(/\/$/, '');
   const types = { strom: ['Strom', 'kWh'], wasser: ['Wasser', 'm³'], gas: ['Gas', 'm³'] };
   let db;
   let records = [];
@@ -46,6 +52,49 @@ document.querySelector('#copy').addEventListener('click', async () => {
   let photoVersion = 0;
   let previewUrl;
   let historyUrls = [];
+  let pendingBatch = null;
+  let serviceReady = false;
+  let sending = false;
+  let mutating = false;
+
+  function deliveryMessage(text, error = false) {
+    deliveryStatus.textContent = text;
+    deliveryStatus.dataset.error = String(error);
+  }
+
+  function updateCompletion() {
+    const open = records.filter(record => !record.sentAt);
+    const count = pendingBatch ? pendingBatch.recordIds.length : open.length;
+    document.querySelector('#meter-pending-count').textContent = pendingBatch
+      ? `Erfassung mit ${count} Ablesung(en) begonnen. Ein erneuter Versuch verwendet dieselbe Erfassungsnummer.`
+      : `${count} offene Ablesung(en) für die nächste gemeinsame E-Mail.`;
+    finishButton.disabled = !db || !serviceReady || sending || mutating || count === 0;
+  }
+
+  async function api(path, options = {}) {
+    const response = await fetch(`${apiBase}/api/${path}`, {
+      ...options, headers: { 'Authorization': `Bearer ${accessCode.value}`, ...options.headers },
+      cache: 'no-store', signal: AbortSignal.timeout(110000)
+    });
+    let data;
+    try { data = await response.json(); } catch { throw new Error('Der Speicher- und Versanddienst ist nicht erreichbar.'); }
+    if (!response.ok) throw new Error(data.error || 'Die Übermittlung ist fehlgeschlagen.');
+    return data;
+  }
+
+  async function checkService() {
+    try {
+      const response = await fetch(`${apiBase}/api/status`, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+      const config = await response.json();
+      if (!response.ok || config.storageReady !== true || config.recipient !== 'info@uhlenkoeper-camp.de') throw new Error();
+      serviceReady = config.mailReady === true;
+      archiveButton.disabled = false;
+      deliveryMessage(serviceReady ? 'Speicher und E-Mail-Versand sind eingerichtet. Erfasse alle Werte und schließe die Erfassung anschließend ab.' : 'Der zentrale Speicher ist erreichbar. Der E-Mail-Versand muss noch eingerichtet werden.', !serviceReady);
+    } catch {
+      deliveryMessage('Zentrale Speicherung und E-Mail-Versand sind noch nicht erreichbar. Deine Entwürfe bleiben lokal erhalten.', true);
+    }
+    updateCompletion();
+  }
 
   function localToday() {
     const now = new Date();
@@ -163,10 +212,13 @@ document.querySelector('#copy').addEventListener('click', async () => {
     list.replaceChildren();
     document.querySelector('#meter-empty').hidden = records.length > 0;
     exportButton.disabled = records.length === 0;
+    updateCompletion();
     for (const record of records) {
       const item = element('li', 'meter-entry');
       const [label, unit] = types[record.type];
       item.append(element('h4', '', record.meter));
+      if (record.sentAt) item.append(element('span', 'meter-delivery-badge', 'Zentral gespeichert · E-Mail an Mailanbieter übergeben'));
+      else if (record.cloudStored) item.append(element('span', 'meter-delivery-badge', 'Zentral gespeichert · Versand noch nicht bestätigt'));
       item.append(element('p', '', `${label} · ${new Date(`${record.date}T12:00:00`).toLocaleDateString('de-DE')}`));
       item.append(element('p', 'meter-reading', `${record.value.toLocaleString('de-DE', { maximumFractionDigits: 6 })} ${unit}`));
       if (record.note) item.append(element('p', '', record.note));
@@ -182,19 +234,28 @@ document.querySelector('#copy').addEventListener('click', async () => {
       photoLink.download = `zaehler-${record.date}-${record.id}.jpg`;
       const remove = element('button', 'meter-text-button meter-delete', 'Löschen');
       remove.type = 'button';
+      remove.disabled = sending || mutating || Boolean(pendingBatch?.recordIds.includes(record.id));
       remove.setAttribute('aria-label', `Ablesung für ${record.meter} vom ${record.date} löschen`);
       remove.addEventListener('click', async () => {
-        if (!confirm(`Ablesung für „${record.meter}“ vom ${record.date} inklusive Foto auf diesem Gerät löschen?`)) return;
+        if (sending || mutating || pendingBatch?.recordIds.includes(record.id)) return;
+        if (!confirm(`Lokale Ablesung für „${record.meter}“ vom ${record.date} inklusive Foto auf diesem Gerät löschen? Zentral gespeicherte Kopien bleiben erhalten.`)) return;
+        mutating = true;
+        fields.disabled = true;
+        updateCompletion();
         remove.disabled = true;
         try {
           await transaction('readwrite', store => store.delete(record.id));
           records = records.filter(entry => entry.id !== record.id);
           render();
-          tell('Ablesung und Foto wurden gelöscht.');
+          tell('Die lokale Ablesung und das lokale Foto wurden gelöscht. Zentral gespeicherte Kopien bleiben erhalten.');
           exportButton.disabled ? name.focus() : exportButton.focus();
         } catch {
           remove.disabled = false;
           tell('Die Ablesung konnte nicht gelöscht werden. Bitte erneut versuchen.', true);
+        } finally {
+          mutating = false;
+          fields.disabled = false;
+          render();
         }
       });
       actions.append(photoLink, remove);
@@ -245,6 +306,123 @@ document.querySelector('#copy').addEventListener('click', async () => {
     }
   });
 
+  async function savePending(batch) {
+    await transactionState(store => batch ? store.put(batch) : store.delete('pending'));
+    pendingBatch = batch;
+  }
+
+  function transactionState(action) {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('state', 'readwrite');
+      action(tx.objectStore('state'));
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  }
+
+  async function photoBase64(blob) {
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let binary = '';
+    for (let offset = 0; offset < bytes.length; offset += 32768) binary += String.fromCharCode(...bytes.subarray(offset, offset + 32768));
+    return btoa(binary);
+  }
+
+  finishButton.addEventListener('click', async () => {
+    if (finishButton.disabled || sending) return;
+    if (!accessCode.value) {
+      deliveryMessage('Bitte den Zugangscode für das Camp eingeben.', true);
+      accessCode.focus();
+      return;
+    }
+    if (value.value.trim() || preparedPhoto || note.value.trim() || photo.files.length) {
+      deliveryMessage('Im Formular ist noch eine ungespeicherte Ablesung. Bitte zuerst speichern oder die Eingaben leeren.', true);
+      return;
+    }
+    sending = true;
+    fields.disabled = true;
+    archiveButton.disabled = true;
+    updateCompletion();
+    try {
+      const selected = pendingBatch
+        ? pendingBatch.recordIds.map(id => records.find(record => record.id === id))
+        : records.filter(record => !record.sentAt);
+      if (selected.some(record => !record)) throw new Error('Eine Ablesung der begonnenen Erfassung fehlt. Bitte die lokale Sicherung prüfen.');
+      if (!selected.length || selected.length > 50) throw new Error('Eine Erfassung kann zwischen 1 und 50 Ablesungen enthalten.');
+      if (selected.reduce((total, record) => total + record.photo.size, 0) > 8 * 1024 * 1024) throw new Error('Die Fotos sind zusammen größer als 8 MB. Bitte kleinere Fotos verwenden.');
+      if (!pendingBatch) await savePending({ id: 'pending', batchId: crypto.randomUUID(), recordIds: selected.map(record => record.id) });
+      render();
+      deliveryMessage('Alle Ablesungen und Fotos werden zentral gespeichert. Anschließend wird die gemeinsame E-Mail versendet …');
+      const readings = await Promise.all(selected.map(async record => ({
+        localId: record.id, type: record.type, meter: record.meter, date: record.date,
+        value: record.value, note: record.note, photo: await photoBase64(record.photo)
+      })));
+      const result = await api('submissions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: pendingBatch.batchId, readings }) });
+      if (result.id !== pendingBatch.batchId || result.stored !== true) throw new Error('Die zentrale Speicherung konnte nicht bestätigt werden. Bitte erneut versuchen.');
+      const sent = result.status === 'sent' && typeof result.sentAt === 'string';
+      const updated = selected.map(record => ({ ...record, cloudStored: true, submissionId: result.id, ...(sent ? { sentAt: result.sentAt } : {}) }));
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(['readings', 'state'], 'readwrite');
+        updated.forEach(record => tx.objectStore('readings').put(record));
+        if (sent) tx.objectStore('state').delete('pending');
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      });
+      updated.forEach(record => { records[records.findIndex(entry => entry.id === record.id)] = record; });
+      if (sent) pendingBatch = null;
+      deliveryMessage(sent
+        ? `${selected.length} Ablesung(en) mit Fotos sind zentral gespeichert. Die E-Mail an info@uhlenkoeper-camp.de wurde vom Mailanbieter angenommen. Erfassungsnummer: ${result.id}`
+        : result.error || 'Die Daten sind zentral gespeichert. Der Versand läuft noch. Bitte den Status durch erneutes Abschließen prüfen.', !sent);
+    } catch (error) {
+      deliveryMessage(`${error.message || 'Die Übermittlung ist fehlgeschlagen.'} Deine lokalen Einträge bleiben erhalten. Bei erneutem Abschluss wird dieselbe Erfassungsnummer verwendet.`, true);
+    } finally {
+      sending = false;
+      fields.disabled = false;
+      archiveButton.disabled = false;
+      render();
+    }
+  });
+
+  archiveButton.addEventListener('click', async () => {
+    if (!accessCode.value) {
+      deliveryMessage('Bitte den Zugangscode für das Camp eingeben.', true);
+      accessCode.focus();
+      return;
+    }
+    archiveButton.disabled = true;
+    try {
+      const data = await api('submissions');
+      if (!Array.isArray(data.submissions)) throw new Error('Der Dienst hat keine gültige Übersicht geliefert.');
+      archive.replaceChildren();
+      const labels = { stored: 'gespeichert, Versand ausstehend', sending: 'Versand läuft', uncertain: 'Versandstatus unklar', sent: 'an Mailanbieter übergeben' };
+      for (const batch of data.submissions) {
+        const details = element('details', '');
+        details.append(element('summary', '', `${new Date(batch.createdAt).toLocaleString('de-DE')} · ${batch.readings.length} Ablesung(en) · ${labels[batch.status] || batch.status}`));
+        details.append(element('p', '', `Erfassungsnummer: ${batch.id}`));
+        batch.readings.forEach((record, index) => {
+          const [label, unit] = types[record.type];
+          details.append(element('p', '', `${label} · ${record.meter}\n${record.date} · ${record.value.toLocaleString('de-DE')} ${unit}${record.note ? `\n${record.note}` : ''}`));
+          const button = element('button', 'meter-text-button', 'Gespeichertes Foto herunterladen ↓');
+          button.type = 'button';
+          button.addEventListener('click', async () => {
+            button.disabled = true;
+            try {
+              const response = await fetch(`${apiBase}/api/submissions/${batch.id}/photos/${index}`, { headers: { Authorization: `Bearer ${accessCode.value}` }, cache: 'no-store', signal: AbortSignal.timeout(30000) });
+              if (!response.ok) throw new Error('Das Foto konnte nicht geladen werden. Bitte den Zugangscode prüfen.');
+              download(await response.blob(), `zaehler-${batch.id}-${index + 1}.jpg`);
+            } catch (error) { deliveryMessage(error.message, true); }
+            finally { button.disabled = false; }
+          });
+          details.append(button);
+        });
+        archive.append(details);
+      }
+      deliveryMessage(`${data.submissions.length} zentral gespeicherte Erfassung(en) geladen (maximal die neuesten 100).`);
+    } catch (error) { deliveryMessage(error.message, true); }
+    finally { archiveButton.disabled = false; }
+  });
+
   exportButton.addEventListener('click', () => {
     // Neutralize spreadsheet formulas in free text before quoting CSV cells.
     const cell = input => `"${String(input).replace(/^[\s]*[=+@-]/, match => `'${match}`).replaceAll('"', '""')}"`;
@@ -258,9 +436,10 @@ document.querySelector('#copy').addEventListener('click', async () => {
   });
 
   try {
-    const open = indexedDB.open('uhlenkoeper-meter-readings', 1);
+    const open = indexedDB.open('uhlenkoeper-meter-readings', 2);
     open.onupgradeneeded = () => {
-      open.result.createObjectStore('readings', { keyPath: 'id', autoIncrement: true });
+      if (!open.result.objectStoreNames.contains('readings')) open.result.createObjectStore('readings', { keyPath: 'id', autoIncrement: true });
+      if (!open.result.objectStoreNames.contains('state')) open.result.createObjectStore('state', { keyPath: 'id' });
     };
     open.onerror = () => tell('Der lokale Speicher ist nicht verfügbar. Bitte Browserspeicher zulassen und die Seite neu laden.', true);
     open.onblocked = () => tell('Bitte andere Tabs dieser Seite schließen und neu laden, um den lokalen Speicher zu öffnen.', true);
@@ -269,14 +448,23 @@ document.querySelector('#copy').addEventListener('click', async () => {
       db.onversionchange = () => {
         db.close();
         fields.disabled = true;
+        serviceReady = false;
+        updateCompletion();
         tell('Der lokale Speicher wurde in einem anderen Tab geändert. Bitte die Seite neu laden.', true);
       };
       try {
         records = await transaction('readonly', store => store.getAll());
+        pendingBatch = await new Promise((resolve, reject) => {
+          const tx = db.transaction('state', 'readonly');
+          const request = tx.objectStore('state').get('pending');
+          tx.oncomplete = () => resolve(request.result || null);
+          tx.onerror = () => reject(tx.error);
+        });
         records.sort((a, b) => b.date.localeCompare(a.date) || b.createdAt - a.createdAt);
         render();
         fields.disabled = false;
         tell('Bereit für deine nächste Ablesung.');
+        checkService();
       } catch {
         tell('Gespeicherte Ablesungen konnten nicht geladen werden. Bitte die Seite neu laden.', true);
       }
