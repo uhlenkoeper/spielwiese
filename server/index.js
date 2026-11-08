@@ -58,7 +58,8 @@ function validate(input) {
     if (total > 8 * 1024 * 1024) throw failure(413, 'Die Fotos sind zusammen größer als 8 MB. Bitte kleinere Fotos verwenden.');
     return { localId: record.localId, type: record.type, meter: record.meter.trim(), date: record.date, value: record.value, note: record.note.trim(), photo };
   });
-  return { id: input.id.toLowerCase(), readings };
+  if (typeof input.receiptToken !== 'string' || !/^[0-9a-f-]{72}$/i.test(input.receiptToken)) throw failure(400, 'Die automatische Empfangsbestätigung fehlt. Bitte die Seite neu laden.');
+  return { id: input.id.toLowerCase(), receiptToken: input.receiptToken, readings };
 }
 
 function csv(readings) {
@@ -67,21 +68,22 @@ function csv(readings) {
 }
 
 export function createMeterServer({ dataDir, accessCode, transport, from, allowedOrigin = '' }) {
-  if (!accessCode || accessCode.length < 20) throw new Error('METER_ACCESS_CODE muss mindestens 20 Zeichen enthalten.');
+  if (accessCode && accessCode.length < 20) throw new Error('Ein optionaler Verwaltungsschlüssel muss mindestens 20 Zeichen enthalten.');
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(resolve(dataDir, 'readings.sqlite'));
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
     CREATE TABLE IF NOT EXISTS submissions (
       id TEXT PRIMARY KEY, digest TEXT NOT NULL, created_at TEXT NOT NULL,
-      state TEXT NOT NULL, metadata TEXT NOT NULL, sent_at TEXT, mail_id TEXT
+      state TEXT NOT NULL, metadata TEXT NOT NULL, sent_at TEXT, mail_id TEXT, receipt_hash TEXT
     );
     CREATE TABLE IF NOT EXISTS photos (
       submission_id TEXT NOT NULL REFERENCES submissions(id), position INTEGER NOT NULL,
       jpeg BLOB NOT NULL, PRIMARY KEY(submission_id, position)
     );`);
+  if (!db.prepare('PRAGMA table_info(submissions)').all().some(column => column.name === 'receipt_hash')) db.exec('ALTER TABLE submissions ADD COLUMN receipt_hash TEXT');
   // If a process stopped during SMTP submission, delivery cannot be inferred.
   db.prepare("UPDATE submissions SET state='uncertain' WHERE state='sending'").run();
-  const passwordHash = hash(accessCode);
+  const passwordHash = accessCode ? hash(accessCode) : null;
   const attempts = new Map();
   const ready = Boolean(transport && from);
 
@@ -110,23 +112,22 @@ export function createMeterServer({ dataDir, accessCode, transport, from, allowe
         return res.end();
       }
       if (path === '/api/status' && req.method === 'GET') return reply(200, { storageReady: true, mailReady: ready, recipient });
-      // Rate-limit invalid access codes without logging them. Bound the map.
-      const ip = req.socket.remoteAddress;
-      const now = Date.now();
-      const entry = attempts.get(ip);
-      if (entry && entry.until > now && entry.count >= 10) return reply(429, { error: 'Zu viele ungültige Zugangscodes. Bitte in 15 Minuten erneut versuchen.' });
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
-      if (!timingSafeEqual(hash(token), passwordHash)) {
-        if (attempts.size > 10000) attempts.clear();
-        attempts.set(ip, { count: entry && entry.until > now ? entry.count + 1 : 1, until: entry && entry.until > now ? entry.until : now + 15 * 60000 });
-        return reply(401, { error: 'Bitte den gültigen Zugangscode für das Camp eingeben.' });
-      }
-      attempts.delete(ip);
+      const admin = passwordHash && timingSafeEqual(hash(token), passwordHash);
+      const summary = row => ({ id: row.id, createdAt: row.created_at, status: row.state, sentAt: row.sent_at, readings: JSON.parse(row.metadata) });
       if (path === '/api/submissions' && req.method === 'GET') {
+        if (!admin) return reply(401, { error: 'Die Gesamtübersicht ist nur für die Verwaltung verfügbar.' });
         const rows = db.prepare('SELECT id, created_at, state, metadata, sent_at FROM submissions ORDER BY created_at DESC LIMIT 100').all();
-        return reply(200, { submissions: rows.map(row => ({ id: row.id, createdAt: row.created_at, status: row.state, sentAt: row.sent_at, readings: JSON.parse(row.metadata) })) });
+        return reply(200, { submissions: rows.map(summary) });
       }
       const photoPath = path.match(/^\/api\/submissions\/([0-9a-f-]{36})\/photos\/(\d+)$/);
+      const submissionPath = path.match(/^\/api\/submissions\/([0-9a-f-]{36})$/);
+      if ((photoPath || submissionPath) && req.method === 'GET') {
+        const row = db.prepare('SELECT * FROM submissions WHERE id=?').get((photoPath || submissionPath)[1]);
+        const ownReceipt = row?.receipt_hash && timingSafeEqual(hash(token), Buffer.from(row.receipt_hash, 'hex'));
+        if (!row || (!admin && !ownReceipt)) return reply(404, { error: 'Erfassung nicht verfügbar.' });
+        if (submissionPath) return reply(200, { submission: summary(row) });
+      }
       if (photoPath && req.method === 'GET') {
         const photo = db.prepare('SELECT jpeg FROM photos WHERE submission_id=? AND position=?').get(photoPath[1], Number(photoPath[2]));
         if (!photo) return reply(404, { error: 'Foto nicht gefunden.' });
@@ -139,11 +140,20 @@ export function createMeterServer({ dataDir, accessCode, transport, from, allowe
       const metadata = batch.readings.map(({ photo, ...record }) => record);
       const digest = hash(JSON.stringify(metadata) + batch.readings.map(r => hash(r.photo).toString('hex')).join('')).toString('hex');
       let row = db.prepare('SELECT * FROM submissions WHERE id=?').get(batch.id);
+      const receiptHash = hash(batch.receiptToken).toString('hex');
+      if (row && row.receipt_hash !== receiptHash) throw failure(404, 'Erfassung nicht verfügbar.');
       if (row && row.digest !== digest) throw failure(409, 'Diese Erfassungsnummer gehört bereits zu anderen Daten.');
       if (!row) {
+        // Bound public submissions; retries of an existing collection keep its ID.
+        const ip = req.socket.remoteAddress;
+        const now = Date.now();
+        for (const [key, value] of attempts) if (value.until <= now) attempts.delete(key);
+        const entry = attempts.get(ip) || { count: 0, until: now + 3600000 };
+        if (entry.count >= 30 || attempts.size >= 10000) return reply(429, { error: 'Zurzeit wurden zu viele Erfassungen übermittelt. Bitte später erneut versuchen.' });
+        attempts.set(ip, { count: entry.count + 1, until: entry.until });
         db.exec('BEGIN IMMEDIATE');
         try {
-          db.prepare("INSERT INTO submissions(id,digest,created_at,state,metadata) VALUES(?,?,?,'stored',?)").run(batch.id, digest, new Date().toISOString(), JSON.stringify(metadata));
+          db.prepare("INSERT INTO submissions(id,digest,created_at,state,metadata,receipt_hash) VALUES(?,?,?,'stored',?,?)").run(batch.id, digest, new Date().toISOString(), JSON.stringify(metadata), receiptHash);
           batch.readings.forEach((r, index) => db.prepare('INSERT INTO photos(submission_id,position,jpeg) VALUES(?,?,?)').run(batch.id, index, r.photo));
           db.exec('COMMIT');
         } catch (error) { db.exec('ROLLBACK'); throw error; }
@@ -193,7 +203,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     requireTLS: env.SMTP_SECURE !== 'true', auth: { user: env.SMTP_USER, pass: env.SMTP_PASS },
     connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 60000
   }) : null;
-  const server = createMeterServer({ dataDir: resolve(env.DATA_DIR || './data'), accessCode: env.METER_ACCESS_CODE, transport, from: env.SMTP_FROM, allowedOrigin: env.ALLOWED_ORIGIN || '' });
+  const server = createMeterServer({ dataDir: resolve(env.DATA_DIR || './data'), accessCode: env.METER_ADMIN_CODE || env.METER_ACCESS_CODE, transport, from: env.SMTP_FROM, allowedOrigin: env.ALLOWED_ORIGIN || '' });
   server.listen(Number(env.PORT || 8000), env.HOST || '127.0.0.1', () => console.log('Zählerdienst gestartet. Versand:', smtpReady ? 'konfiguriert' : 'noch nicht konfiguriert'));
   for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => server.close());
 }

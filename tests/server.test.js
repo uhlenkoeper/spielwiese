@@ -10,7 +10,7 @@ import { createMeterServer } from '../server/index.js';
 
 const code = 'test-access-code-at-least-20-characters';
 const jpeg = Buffer.from([255, 216, 255, 224, 0, 0, 255, 217]);
-const payload = () => ({ id: randomUUID(), readings: [{ localId: 1, type: 'strom', meter: 'Stellplatz 12', date: '2026-01-01', value: 1234.56, note: '=example', photo: jpeg.toString('base64') }] });
+const payload = () => ({ id: randomUUID(), receiptToken: randomUUID() + randomUUID(), readings: [{ localId: 1, type: 'strom', meter: 'Stellplatz 12', date: '2026-01-01', value: 1234.56, note: '=example', photo: jpeg.toString('base64') }] });
 
 async function fixture(t, options = {}) {
   const dataDir = options.dataDir || mkdtempSync(join(tmpdir(), 'meter-test-'));
@@ -22,7 +22,7 @@ async function fixture(t, options = {}) {
     if (!options.dataDir) rmSync(dataDir, { recursive: true, force: true });
   });
   async function request(path, body, headers = {}) {
-    const response = await fetch(origin + path, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${code}`, ...(body ? { 'Content-Type': 'application/json' } : {}), ...headers }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const response = await fetch(origin + path, { method: body ? 'POST' : 'GET', headers: { ...(body ? { 'Content-Type': 'application/json' } : { Authorization: `Bearer ${code}` }), ...headers }, ...(body ? { body: JSON.stringify(body) } : {}) });
     return { status: response.status, data: await response.json() };
   }
   return { server, origin, dataDir, request };
@@ -75,7 +75,7 @@ test('completion persists values/photos before a single mail, includes attachmen
   assert.equal(calls, 1, 'stored state prevents duplicate mail in another process instance');
 });
 
-test('authorization, origin and input validation protect the archive and writes', async t => {
+test('archive authorization and origin/input validation protect saved data', async t => {
   const app = await fixture(t);
   assert.equal((await app.request('/api/submissions', undefined, { Authorization: '' })).status, 401);
   assert.equal((await app.request('/api/submissions', payload(), { Origin: 'https://untrusted.example' })).status, 403);
@@ -149,4 +149,36 @@ test('simultaneous completion requests share one in-flight mail', async t => {
   release();
   assert.equal((await first).data.status, 'sent');
   assert.equal(calls, 1);
+});
+
+test('public completion needs no camp code, while each receipt only reads its own records', async t => {
+  let mails = 0;
+  const app = await fixture(t, { accessCode: undefined, transport: { async sendMail() { mails++; return { accepted: ['info@uhlenkoeper-camp.de'], messageId: 'public' }; } } });
+  const batch = payload();
+  assert.equal((await app.request('/api/submissions', batch)).data.status, 'sent');
+  assert.equal(mails, 1);
+  assert.equal((await app.request('/api/submissions', undefined, { Authorization: '' })).status, 401);
+  const receipt = { Authorization: `Bearer ${batch.receiptToken}` };
+  const url = `/api/submissions/${batch.id}`;
+  assert.equal((await app.request(url, undefined, { Authorization: '' })).status, 404);
+  assert.equal((await app.request(url, undefined, receipt)).data.submission.id, batch.id);
+  const photo = await fetch(`${app.origin}${url}/photos/0`, { headers: receipt });
+  assert.equal(photo.status, 200);
+  assert.equal((await fetch(`${app.origin}${url}/photos/0`)).status, 404);
+  const other = payload();
+  await app.request('/api/submissions', other);
+  assert.equal((await app.request(`/api/submissions/${other.id}`, undefined, receipt)).status, 404);
+  const wrongReceipt = { ...batch, receiptToken: other.receiptToken };
+  assert.equal((await app.request('/api/submissions', wrongReceipt)).status, 404);
+  assert.equal((await app.request('/api/submissions', batch)).data.status, 'sent');
+  assert.equal(mails, 2);
+});
+
+test('public intake limits new collections without blocking retries', async t => {
+  const app = await fixture(t, { accessCode: undefined });
+  const first = payload();
+  assert.equal((await app.request('/api/submissions', first)).status, 200);
+  for (let i = 0; i < 29; i++) assert.equal((await app.request('/api/submissions', payload())).status, 200);
+  assert.equal((await app.request('/api/submissions', payload())).status, 429);
+  assert.equal((await app.request('/api/submissions', first)).status, 200);
 });

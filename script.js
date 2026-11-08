@@ -41,7 +41,6 @@ document.querySelector('#copy').addEventListener('click', async () => {
   const exportButton = document.querySelector('#meter-export');
   const finishButton = document.querySelector('#meter-finish');
   const deliveryStatus = document.querySelector('#meter-delivery-status');
-  const accessCode = document.querySelector('#meter-access-code');
   const archiveButton = document.querySelector('#meter-archive-load');
   const archive = document.querySelector('#meter-archive');
   const apiBase = document.querySelector('meta[name="meter-api"]').content.replace(/\/$/, '');
@@ -73,7 +72,7 @@ document.querySelector('#copy').addEventListener('click', async () => {
 
   async function api(path, options = {}) {
     const response = await fetch(`${apiBase}/api/${path}`, {
-      ...options, headers: { 'Authorization': `Bearer ${accessCode.value}`, ...options.headers },
+      ...options,
       cache: 'no-store', signal: AbortSignal.timeout(110000)
     });
     let data;
@@ -330,11 +329,6 @@ document.querySelector('#copy').addEventListener('click', async () => {
 
   finishButton.addEventListener('click', async () => {
     if (finishButton.disabled || sending) return;
-    if (!accessCode.value) {
-      deliveryMessage('Bitte den Zugangscode für das Camp eingeben.', true);
-      accessCode.focus();
-      return;
-    }
     if (value.value.trim() || preparedPhoto || note.value.trim() || photo.files.length) {
       deliveryMessage('Im Formular ist noch eine ungespeicherte Ablesung. Bitte zuerst speichern oder die Eingaben leeren.', true);
       return;
@@ -351,16 +345,17 @@ document.querySelector('#copy').addEventListener('click', async () => {
       if (!selected.length || selected.length > 50) throw new Error('Eine Erfassung kann zwischen 1 und 50 Ablesungen enthalten.');
       if (selected.reduce((total, record) => total + record.photo.size, 0) > 8 * 1024 * 1024) throw new Error('Die Fotos sind zusammen größer als 8 MB. Bitte kleinere Fotos verwenden.');
       if (!pendingBatch) await savePending({ id: 'pending', batchId: crypto.randomUUID(), recordIds: selected.map(record => record.id) });
+      if (!pendingBatch.receiptToken) await savePending({ ...pendingBatch, receiptToken: crypto.randomUUID() + crypto.randomUUID() });
       render();
       deliveryMessage('Alle Ablesungen und Fotos werden zentral gespeichert. Anschließend wird die gemeinsame E-Mail versendet …');
       const readings = await Promise.all(selected.map(async record => ({
         localId: record.id, type: record.type, meter: record.meter, date: record.date,
         value: record.value, note: record.note, photo: await photoBase64(record.photo)
       })));
-      const result = await api('submissions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: pendingBatch.batchId, readings }) });
+      const result = await api('submissions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: pendingBatch.batchId, receiptToken: pendingBatch.receiptToken, readings }) });
       if (result.id !== pendingBatch.batchId || result.stored !== true) throw new Error('Die zentrale Speicherung konnte nicht bestätigt werden. Bitte erneut versuchen.');
       const sent = result.status === 'sent' && typeof result.sentAt === 'string';
-      const updated = selected.map(record => ({ ...record, cloudStored: true, submissionId: result.id, ...(sent ? { sentAt: result.sentAt } : {}) }));
+      const updated = selected.map(record => ({ ...record, cloudStored: true, submissionId: result.id, receiptToken: pendingBatch.receiptToken, ...(sent ? { sentAt: result.sentAt } : {}) }));
       await new Promise((resolve, reject) => {
         const tx = db.transaction(['readings', 'state'], 'readwrite');
         updated.forEach(record => tx.objectStore('readings').put(record));
@@ -385,18 +380,18 @@ document.querySelector('#copy').addEventListener('click', async () => {
   });
 
   archiveButton.addEventListener('click', async () => {
-    if (!accessCode.value) {
-      deliveryMessage('Bitte den Zugangscode für das Camp eingeben.', true);
-      accessCode.focus();
-      return;
-    }
     archiveButton.disabled = true;
     try {
-      const data = await api('submissions');
-      if (!Array.isArray(data.submissions)) throw new Error('Der Dienst hat keine gültige Übersicht geliefert.');
+      const receipts = new Map(records.filter(record => record.submissionId && record.receiptToken).map(record => [record.submissionId, record.receiptToken]));
+      if (pendingBatch?.receiptToken) receipts.set(pendingBatch.batchId, pendingBatch.receiptToken);
+      const submissions = [];
+      for (const [id, token] of receipts) {
+        const data = await api(`submissions/${id}`, { headers: { Authorization: `Bearer ${token}` } });
+        submissions.push({ ...data.submission, receiptToken: token });
+      }
       archive.replaceChildren();
       const labels = { stored: 'gespeichert, Versand ausstehend', sending: 'Versand läuft', uncertain: 'Versandstatus unklar', sent: 'an Mailanbieter übergeben' };
-      for (const batch of data.submissions) {
+      for (const batch of submissions) {
         const details = element('details', '');
         details.append(element('summary', '', `${new Date(batch.createdAt).toLocaleString('de-DE')} · ${batch.readings.length} Ablesung(en) · ${labels[batch.status] || batch.status}`));
         details.append(element('p', '', `Erfassungsnummer: ${batch.id}`));
@@ -408,8 +403,8 @@ document.querySelector('#copy').addEventListener('click', async () => {
           button.addEventListener('click', async () => {
             button.disabled = true;
             try {
-              const response = await fetch(`${apiBase}/api/submissions/${batch.id}/photos/${index}`, { headers: { Authorization: `Bearer ${accessCode.value}` }, cache: 'no-store', signal: AbortSignal.timeout(30000) });
-              if (!response.ok) throw new Error('Das Foto konnte nicht geladen werden. Bitte den Zugangscode prüfen.');
+              const response = await fetch(`${apiBase}/api/submissions/${batch.id}/photos/${index}`, { headers: { Authorization: `Bearer ${batch.receiptToken}` }, cache: 'no-store', signal: AbortSignal.timeout(30000) });
+              if (!response.ok) throw new Error('Das gespeicherte Foto konnte nicht geladen werden.');
               download(await response.blob(), `zaehler-${batch.id}-${index + 1}.jpg`);
             } catch (error) { deliveryMessage(error.message, true); }
             finally { button.disabled = false; }
@@ -418,7 +413,7 @@ document.querySelector('#copy').addEventListener('click', async () => {
         });
         archive.append(details);
       }
-      deliveryMessage(`${data.submissions.length} zentral gespeicherte Erfassung(en) geladen (maximal die neuesten 100).`);
+      deliveryMessage(submissions.length ? `${submissions.length} eigene zentral gespeicherte Erfassung(en) geladen.` : 'In diesem Browser sind noch keine abgeschlossenen Erfassungen hinterlegt.');
     } catch (error) { deliveryMessage(error.message, true); }
     finally { archiveButton.disabled = false; }
   });
